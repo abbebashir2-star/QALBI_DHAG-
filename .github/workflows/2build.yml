@@ -16,6 +16,7 @@ jobs:
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      GRADLE_VERSION: '8.11.1'
 
     steps:
       - name: Checkout repository
@@ -27,13 +28,48 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # ---- Hitta var Android-projektet faktiskt ligger ----
+      - name: Find Gradle project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJ=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            PROJ="$(dirname "$f")"
+            break
+          done < <(find . -maxdepth 5 \
+                    \( -name settings.gradle -o -name settings.gradle.kts \) \
+                    -not -path './.git/*' | sort)
+
+          if [ -z "$PROJ" ]; then
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              if grep -q 'com.android.application' "$f"; then
+                PROJ="$(dirname "$f")"
+                break
+              fi
+            done < <(find . -maxdepth 5 -name 'build.gradle*' -not -path './.git/*' | sort)
+          fi
+
+          if [ -z "$PROJ" ]; then
+            echo "::error::Hittade inget Android/Gradle-projekt i repot."
+            find . -maxdepth 4 -name '*.gradle*' -not -path './.git/*'
+            exit 1
+          fi
+
+          PROJ="${PROJ#./}"
+          echo "PROJ_DIR=$PROJ" >> "$GITHUB_ENV"
+          echo "Projektkatalog: $PROJ"
+          ls -la "$PROJ"
+
       - name: Locate Android SDK tools
         shell: bash
         run: |
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
-            -type f -name sdkmanager 2>/dev/null \
-            | sort -V | tail -n 1)"
+            -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
 
           if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: sdkmanager was not found."
@@ -48,27 +84,47 @@ jobs:
       - name: Install Android SDK packages
         shell: bash
         run: |
-          yes | "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" --licenses || true
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
 
-          "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          COMPILE_SDK="$(grep -rhoE 'compileSdk(Version)?[[:space:]]*=?[[:space:]]*[0-9]+' "$PROJ_DIR" 2>/dev/null \
+            | grep -oE '[0-9]+$' | sort -n | tail -1 || true)"
+          [ -z "$COMPILE_SDK" ] && COMPILE_SDK=35
+          echo "compileSdk = $COMPILE_SDK"
+
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+            "platform-tools" "platforms;android-$COMPILE_SDK"
+
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "build-tools;$COMPILE_SDK.0.0" \
+            || "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: ${{ env.GRADLE_VERSION }}
 
       - name: Build APK
-        run: gradle --no-daemon assembleDebug
+        shell: bash
+        working-directory: ${{ env.PROJ_DIR }}
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon --stacktrace assembleDebug
+          else
+            gradle --no-daemon wrapper --gradle-version "$GRADLE_VERSION"
+            chmod +x ./gradlew
+            ./gradlew --no-daemon --stacktrace assembleDebug
+          fi
+
+      - name: Show Gradle projects (diagnostics)
+        if: failure()
+        shell: bash
+        working-directory: ${{ env.PROJ_DIR }}
+        run: gradle --no-daemon projects || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Qalbi-PUBG-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJ_DIR }}/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
