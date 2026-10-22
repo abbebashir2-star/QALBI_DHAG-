@@ -48,12 +48,12 @@ jobs:
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
             "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      # ---- Skapar app-modulen om den inte finns ----
       - name: Prepare app module
         shell: bash
         run: |
           set -euo pipefail
           PKGDIR="app/src/main/java/$(printf '%s' "$PKG" | tr . /)"
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
 
           if [ ! -f app/build.gradle ]; then
             echo "app/ saknas - skapar modulstruktur fran root-filerna"
@@ -67,30 +67,30 @@ jobs:
             fi
 
             cat > app/build.gradle <<'EOF'
-plugins { id 'com.android.application' }
+          plugins { id 'com.android.application' }
 
-android {
-    namespace 'com.qalbi.pubg'
-    compileSdk 35
+          android {
+              namespace 'com.qalbi.pubg'
+              compileSdk 35
 
-    defaultConfig {
-        applicationId "com.qalbi.pubg"
-        minSdk 23
-        targetSdk 35
-        versionCode 1
-        versionName "1.0"
-    }
+              defaultConfig {
+                  applicationId "com.qalbi.pubg"
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName "1.0"
+              }
 
-    buildTypes {
-        release { minifyEnabled false }
-    }
+              buildTypes {
+                  release { minifyEnabled false }
+              }
 
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-}
-EOF
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
           fi
 
           echo "--- projektstruktur ---"
